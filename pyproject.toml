@@ -1,0 +1,85 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "django-dependency-map"
+version = "0.1.0"
+description = "Interactive dependency map for Django projects — merges model FK relationships with import graph analysis"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+keywords = ["django", "dependencies", "architecture", "visualization", "import-linter", "grimp"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: Django",
+    "Framework :: Django :: 4.2",
+    "Framework :: Django :: 5.0",
+    "Framework :: Django :: 5.1",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Software Development :: Quality Assurance",
+]
+
+# Core dependency is just Django itself.
+# django-extensions and grimp are optional — the command degrades gracefully
+# if either is absent and warns the user.
+dependencies = [
+    "django>=4.2",
+]
+
+[project.optional-dependencies]
+# Full feature set
+full = [
+    "django-extensions>=3.2",
+    "grimp>=3.3",
+]
+# Import analysis only (no graph_models)
+imports = [
+    "grimp>=3.3",
+]
+# Model graph only (no grimp)
+models = [
+    "django-extensions>=3.2",
+]
+# Dev / test extras
+dev = [
+    "django-extensions>=3.2",
+    "grimp>=3.3",
+    "pytest>=7",
+    "pytest-django>=4",
+    "hatch",
+]
+
+[project.urls]
+Homepage = "https://github.com/softwarecrafts/django-dependency-map"
+Repository = "https://github.com/softwarecrafts/django-dependency-map"
+Issues = "https://github.com/softwarecrafts/django-dependency-map/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dependency_map"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "pyproject.toml",
+]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "tests.settings"
+pythonpath = ["src"]
+
+[tool.ruff]
+src = ["src"]
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]

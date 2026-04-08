@@ -1,0 +1,302 @@
+{% load i18n %}
+<style>
+/* Only custom styles — DjDT provides table, font, and layout styling */
+#djdt-depmap .dm-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 0.8em;
+  flex-wrap: wrap;
+}
+
+#djdt-depmap .dm-tabs {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--djdt-table-border-color, #ddd);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+#djdt-depmap .dm-tab {
+  padding: 4px 14px;
+  background: var(--djdt-table-header-background-color, #f5f5f5);
+  border: none;
+  border-right: 1px solid var(--djdt-table-border-color, #ddd);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: bold;
+  text-transform: uppercase;
+  color: var(--djdt-table-header-color, #444);
+}
+#djdt-depmap .dm-tab:last-child { border-right: none; }
+#djdt-depmap .dm-tab.active { background: var(--djdt-panel-content-table-background-color, #fff); }
+#djdt-depmap .dm-tab:hover:not(.active) { opacity: 0.8; }
+
+#djdt-depmap .dm-graph-link {
+  margin-left: auto;
+  font-size: 11px;
+}
+
+/* Summary pills */
+#djdt-depmap .dm-pills {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 0.8em;
+  flex-wrap: wrap;
+}
+#djdt-depmap .dm-pill {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--djdt-table-border-color, #ddd);
+}
+#djdt-depmap .dm-pill.cycle    { border-color: #f97316; color: #c2500a; }
+#djdt-depmap .dm-pill.fk-cycle { border-color: #eab308; color: #854d0e; }
+#djdt-depmap .dm-pill.violation{ border-color: #ef4444; color: #b91c1c; }
+#djdt-depmap .dm-pill.no-grimp { border-color: #a855f7; color: #7e22ce; }
+#djdt-depmap .dm-pill.info     { border-color: #3b82f6; color: #1d4ed8; }
+
+/* Inline badges */
+#djdt-depmap .dm-badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-left: 4px;
+  vertical-align: middle;
+  line-height: 1.5;
+}
+#djdt-depmap .dm-badge-cycle    { color: #c2500a; border: 1px solid #f97316; }
+#djdt-depmap .dm-badge-fkcycle  { color: #854d0e; border: 1px solid #eab308; }
+#djdt-depmap .dm-badge-violation{ color: #b91c1c; border: 1px solid #ef4444; }
+#djdt-depmap .dm-badge-3p       { color: #64748b; border: 1px solid #cbd5e1; }
+#djdt-depmap .dm-badge-view     { color: #1d4ed8; border: 1px solid #93c5fd; }
+
+/* App chip tags within cells */
+#djdt-depmap .dm-applist {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+#djdt-depmap .dm-apptag {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--djdt-table-border-color, #ddd);
+  white-space: nowrap;
+}
+#djdt-depmap .dm-apptag.is-request {
+  border-color: #93c5fd;
+  color: #1d4ed8;
+  font-weight: bold;
+}
+#djdt-depmap .dm-empty { opacity: 0.5; font-style: italic; }
+#djdt-depmap .dm-cycle-label {
+  font-size: 10px;
+  opacity: 0.6;
+  margin-top: 2px;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+</style>
+
+<div id="djdt-depmap">
+
+  {# ── Header ────────────────────────────────────────────────────────────── #}
+  <div class="dm-header">
+    <div class="dm-tabs">
+      <button class="dm-tab active" data-depmap-tab="request">
+        This Request ({{ request_app_count }})
+      </button>
+      <button class="dm-tab" data-depmap-tab="all">
+        All Apps ({{ all_app_count }})
+      </button>
+    </div>
+
+    {% if full_graph_url %}
+      <a href="{{ full_graph_url }}" class="dm-graph-link" target="_blank"
+         title="Open interactive graph with request apps highlighted">
+        View full graph &rarr;
+      </a>
+    {% endif %}
+  </div>
+
+  {# ── Summary pills ─────────────────────────────────────────────────────── #}
+  <div class="dm-pills">
+    {% if request_app %}
+      <span class="dm-pill info">view: {{ request_app }}</span>
+    {% endif %}
+    {% if import_cycle_count %}
+      <span class="dm-pill cycle">&#x27F3; {{ import_cycle_count }} import cycle{{ import_cycle_count|pluralize }}</span>
+    {% endif %}
+    {% if fk_cycle_count %}
+      <span class="dm-pill fk-cycle">&#x27F3; {{ fk_cycle_count }} FK cycle{{ fk_cycle_count|pluralize }}</span>
+    {% endif %}
+    {% if violation_count %}
+      <span class="dm-pill violation">&#x26A0; {{ violation_count }} violation{{ violation_count|pluralize }}</span>
+    {% endif %}
+    {% if not has_grimp %}
+      <span class="dm-pill no-grimp">import edges unavailable &mdash; pip install grimp</span>
+    {% endif %}
+  </div>
+
+  {# ── Request tab ───────────────────────────────────────────────────────── #}
+  <div id="djdt-depmap-request">
+    {% if request_rows %}
+      <table>
+        <thead>
+          <tr>
+            <th>App</th>
+            <th>Imports from</th>
+            <th>Imported by</th>
+            <th>FK targets</th>
+            <th>Cycles / violations</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in request_rows %}
+            <tr>
+              <td>
+                {{ row.name }}
+                {% if row.name == request_app %}<span class="dm-badge dm-badge-view">view</span>{% endif %}
+                {% if row.is_third_party %}<span class="dm-badge dm-badge-3p">3P</span>{% endif %}
+                {% if row.in_violation %}<span class="dm-badge dm-badge-violation">violation</span>{% endif %}
+              </td>
+              <td>
+                {% if row.imports_from %}
+                  <div class="dm-applist">
+                    {% for dep in row.imports_from %}
+                      <span class="dm-apptag {% if dep in request_apps %}is-request{% endif %}">{{ dep }}</span>
+                    {% endfor %}
+                  </div>
+                {% else %}
+                  <span class="dm-empty">&mdash;</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if row.imported_by %}
+                  <div class="dm-applist">
+                    {% for dep in row.imported_by %}
+                      <span class="dm-apptag {% if dep in request_apps %}is-request{% endif %}">{{ dep }}</span>
+                    {% endfor %}
+                  </div>
+                {% else %}
+                  <span class="dm-empty">&mdash;</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if row.fk_targets %}
+                  <div class="dm-applist">
+                    {% for dep in row.fk_targets %}
+                      <span class="dm-apptag">{{ dep }}</span>
+                    {% endfor %}
+                  </div>
+                {% else %}
+                  <span class="dm-empty">&mdash;</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if row.cycle_kind == "import" %}
+                  <span class="dm-badge dm-badge-cycle">&#x27F3; import</span>
+                {% elif row.cycle_kind == "fk" %}
+                  <span class="dm-badge dm-badge-fkcycle">&#x27F3; FK</span>
+                {% elif row.cycle_kind == "both" %}
+                  <span class="dm-badge dm-badge-cycle">&#x27F3; import</span>
+                  <span class="dm-badge dm-badge-fkcycle">&#x27F3; FK</span>
+                {% endif %}
+                {% if row.cycle_label %}
+                  <div class="dm-cycle-label" title="{{ row.cycle_label }}">{{ row.cycle_label }}</div>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p>
+        Could not resolve a Django app for this request.
+        <br><small>This can happen for static files, DjDT's own URLs, or middleware-intercepted responses.</small>
+      </p>
+    {% endif %}
+  </div>
+
+  {# ── All Apps tab ──────────────────────────────────────────────────────── #}
+  <div id="djdt-depmap-all" style="display:none">
+    {% if all_rows %}
+      <table>
+        <thead>
+          <tr>
+            <th>App</th>
+            <th>Imports from</th>
+            <th>Imported by</th>
+            <th>FK targets</th>
+            <th>Cycles / violations</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in all_rows %}
+            <tr{% if row.is_request %} class="djdt-highlighted"{% endif %}>
+              <td>
+                <strong>{% if row.is_request %}&#x25B8; {% endif %}</strong>{{ row.name }}
+                {% if row.name == request_app %}<span class="dm-badge dm-badge-view">view</span>{% endif %}
+                {% if row.is_third_party %}<span class="dm-badge dm-badge-3p">3P</span>{% endif %}
+                {% if row.in_violation %}<span class="dm-badge dm-badge-violation">violation</span>{% endif %}
+              </td>
+              <td>
+                {% if row.imports_from %}
+                  <div class="dm-applist">
+                    {% for dep in row.imports_from %}
+                      <span class="dm-apptag {% if dep in request_apps %}is-request{% endif %}">{{ dep }}</span>
+                    {% endfor %}
+                  </div>
+                {% else %}
+                  <span class="dm-empty">&mdash;</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if row.imported_by %}
+                  <div class="dm-applist">
+                    {% for dep in row.imported_by %}
+                      <span class="dm-apptag {% if dep in request_apps %}is-request{% endif %}">{{ dep }}</span>
+                    {% endfor %}
+                  </div>
+                {% else %}
+                  <span class="dm-empty">&mdash;</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if row.fk_targets %}
+                  <div class="dm-applist">
+                    {% for dep in row.fk_targets %}
+                      <span class="dm-apptag">{{ dep }}</span>
+                    {% endfor %}
+                  </div>
+                {% else %}
+                  <span class="dm-empty">&mdash;</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if row.cycle_kind == "import" %}
+                  <span class="dm-badge dm-badge-cycle">&#x27F3; import</span>
+                {% elif row.cycle_kind == "fk" %}
+                  <span class="dm-badge dm-badge-fkcycle">&#x27F3; FK</span>
+                {% elif row.cycle_kind == "both" %}
+                  <span class="dm-badge dm-badge-cycle">&#x27F3; import</span>
+                  <span class="dm-badge dm-badge-fkcycle">&#x27F3; FK</span>
+                {% endif %}
+                {% if row.cycle_label %}
+                  <div class="dm-cycle-label" title="{{ row.cycle_label }}">{{ row.cycle_label }}</div>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p>No dependency data available. Check the grimp configuration.</p>
+    {% endif %}
+  </div>
+
+</div>{# /djdt-depmap #}
