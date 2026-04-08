@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
 name = "django-dependency-map"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Interactive dependency map for Django projects — merges model FK relationships with import graph analysis"
 readme = "README.md"
 license = { text = "MIT" }
@@ -16,12 +16,14 @@ classifiers = [
     "Framework :: Django :: 4.2",
     "Framework :: Django :: 5.0",
     "Framework :: Django :: 5.1",
+    "Framework :: Django :: 6.0",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: Software Development :: Quality Assurance",
 ]
@@ -54,12 +56,19 @@ dev = [
     "pytest>=7",
     "pytest-django>=4",
     "hatch",
+    "hatch-vcs",
 ]
 
 [project.urls]
 Homepage = "https://github.com/softwarecrafts/django-dependency-map"
 Repository = "https://github.com/softwarecrafts/django-dependency-map"
 Issues = "https://github.com/softwarecrafts/django-dependency-map/issues"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/dependency_map/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/dependency_map"]

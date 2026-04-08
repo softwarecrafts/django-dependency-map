@@ -2,7 +2,9 @@
   "permissions": {
     "allow": [
       "WebFetch(domain:claude.ai)",
-      "Bash(pip list:*)"
+      "Bash(pip list:*)",
+      "Bash(pip install:*)",
+      "Bash(hatch build:*)"
     ]
   }
 }

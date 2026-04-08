@@ -429,4 +429,5 @@ Drop the `dependency_map/` directory next to your `manage.py` and add `"dependen
 
 * import-linter generation
   * based on current/desired output?
-* auto-refresh - polling of the view
+* cycle breaker - from grimp
+* import counts on the graph
