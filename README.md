@@ -1,5 +1,7 @@
 # django-dependency-map
 
+[![Watch the demo](https://img.youtube.com/vi/5nMno4PWuBw/maxresdefault.jpg)](https://youtu.be/5nMno4PWuBw?si=srm1059Qm4BuMQ90)
+
 An interactive dependency map for Django projects. Merges two sources of structural information and renders them as a live, browsable graph:
 
 - **`graph_models`** (django-extensions) → model-level FK / M2M relationships
