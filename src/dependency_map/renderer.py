@@ -198,6 +198,80 @@ html, body {
 .refresh-btn:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
 .refresh-btn:disabled { opacity: 0.4; cursor: default; }
 
+/* ── Display options dropdown ──────────────────────────────── */
+.display-btn {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 10px;
+  cursor: pointer;
+  background: transparent;
+  color: var(--muted);
+  transition: color .15s, border-color .15s;
+  position: relative;
+}
+.display-btn:hover { color: var(--text); border-color: var(--accent); }
+.display-btn.open  { color: var(--text); border-color: var(--accent); }
+
+.display-menu {
+  display: none;
+  position: absolute;
+  top: 38px;
+  right: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 0;
+  min-width: 180px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.4);
+  z-index: 100;
+}
+.display-menu.visible { display: block; }
+
+.display-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background .1s, color .1s;
+  user-select: none;
+}
+.display-option:hover { background: rgba(255,255,255,.05); color: var(--text); }
+.display-option.active { color: var(--text); }
+.display-option .check {
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+.display-option.active .check { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* ── Import count labels on edges ──────────────────────────── */
+.import-count-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  fill: var(--muted);
+  pointer-events: none;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+
+/* ── Cycle break suggestion ────────────────────────────────── */
+.link.break-suggestion {
+  stroke-dasharray: 4,4 !important;
+  filter: drop-shadow(0 0 3px rgba(251,191,36,.4));
+}
+
 /* ── Canvas ─────────────────────────────────────────────────── */
 #canvas {
   position: relative;
@@ -530,6 +604,17 @@ html, body {
       <button class="layout-btn active" data-layout="force" title="Force-directed layout">force</button>
       <button class="layout-btn" data-layout="hierarchy" title="Hierarchical (dagre) layout">hierarchy</button>
     </div>
+    <div style="position:relative;margin-left:4px">
+      <button class="display-btn" id="display-btn" title="Display options">⚙</button>
+      <div class="display-menu" id="display-menu">
+        <div class="display-option" data-option="importCounts">
+          <span class="check"></span> Import counts
+        </div>
+        <div class="display-option" data-option="cycleBreaker">
+          <span class="check"></span> Cycle breaker
+        </div>
+      </div>
+    </div>
     <button id="refresh-btn" class="refresh-btn" style="display:none" title="Re-run analysis">↻ refresh</button>
     <button id="export-btn" class="refresh-btn" title="Export visible graph (Mermaid / DOT)">⬡ export</button>
   </div>
@@ -597,7 +682,7 @@ const HIGHLIGHT_APPS = __HIGHLIGHT_APPS__;   // [] or ['billing','users']
 // ══ MUTABLE GRAPH STATE ══════════════════════════════════════════════════════
 let FULL_GRAPH;                          // source of truth — never filtered
 let apps, edges, stats, cycles, directImportCycles, directFkCycles;
-let nodes, links, nodeEls, linkEls, sim;
+let nodes, links, nodeEls, linkEls, countLabelEls, sim;
 let maxModels = 1;
 let selected  = null;
 
@@ -851,6 +936,49 @@ document.querySelectorAll('.layout-btn').forEach(btn => {
   });
 });
 
+// ══ DISPLAY OPTIONS ══════════════════════════════════════════════════════════
+const displayOptions = new Set();
+const displayBtn  = document.getElementById('display-btn');
+const displayMenu = document.getElementById('display-menu');
+
+displayBtn.addEventListener('click', (e) => {
+  e.stopPropagation();
+  displayMenu.classList.toggle('visible');
+  displayBtn.classList.toggle('open');
+});
+document.addEventListener('click', () => {
+  displayMenu.classList.remove('visible');
+  displayBtn.classList.remove('open');
+});
+displayMenu.addEventListener('click', (e) => e.stopPropagation());
+
+document.querySelectorAll('.display-option').forEach(opt => {
+  opt.addEventListener('click', () => {
+    const key = opt.dataset.option;
+    if (displayOptions.has(key)) {
+      displayOptions.delete(key);
+      opt.classList.remove('active');
+      opt.querySelector('.check').textContent = '';
+    } else {
+      displayOptions.add(key);
+      opt.classList.add('active');
+      opt.querySelector('.check').textContent = '✓';
+    }
+    updateDisplayOptions();
+  });
+});
+
+function updateDisplayOptions() {
+  // Import count labels
+  if (countLabelEls) {
+    countLabelEls.attr('display', displayOptions.has('importCounts') ? null : 'none');
+  }
+  // Cycle breaker styling
+  if (linkEls) {
+    linkEls.classed('break-suggestion', d => displayOptions.has('cycleBreaker') && d.is_break_suggestion);
+  }
+}
+
 // ══ REFRESH BUTTON ════════════════════════════════════════════════════════════
 if (REFRESH_URL) document.getElementById('refresh-btn').style.display = '';
 document.getElementById('refresh-btn').addEventListener('click', refreshGraph);
@@ -925,12 +1053,19 @@ function buildLinks() {
       const t=typeof d.target==='object'?d.target.id:d.target;
       let html=`<div class="tt-title">${s} → ${t}</div>`;
       html+=`<div class="tt-row">type: <strong>${d.types.join(' + ')}</strong></div>`;
+      if (d.import_count>0)  html+=`<div class="tt-row">imports: <strong>${d.import_count}</strong></div>`;
       if (d.in_import_cycle) html+=`<div class="tt-row" style="color:${CYCLE_COLOR}">⟳ import cycle</div>`;
       if (d.in_fk_cycle)     html+=`<div class="tt-row" style="color:${FK_CYCLE_COLOR}">⟳ FK cycle</div>`;
       if (d.violation)       html+=`<div class="tt-row" style="color:var(--violation)">⚠ violation</div>`;
+      if (d.is_break_suggestion) html+=`<div class="tt-row" style="color:#fbbf24">✂ suggested cycle break</div>`;
       if (d.model_edges.length) {
-        html+=`<div class="tt-row" style="margin-top:6px;color:var(--muted)">FK / M2M:</div>`;
-        d.model_edges.slice(0,5).forEach(me=>{ html+=`<div class="tt-row">&nbsp;&nbsp;${me.from} → ${me.to}${me.label?` <span style="color:var(--muted)">(${me.label})</span>`:''}</div>`; });
+        const typeLabels = {fk:'FK',o2o:'O2O',m2m:'M2M',generic:'Generic'};
+        html+=`<div class="tt-row" style="margin-top:6px;color:var(--muted)">Model relations:</div>`;
+        d.model_edges.slice(0,5).forEach(me=>{
+          const tag = typeLabels[me.type]||'FK';
+          const detail = me.label ? `${tag}: ${me.label}` : tag;
+          html+=`<div class="tt-row">&nbsp;&nbsp;${me.from} → ${me.to} <span style="color:var(--muted)">(${detail})</span></div>`;
+        });
         if (d.model_edges.length>5) html+=`<div class="tt-row" style="color:var(--muted)">+${d.model_edges.length-5} more</div>`;
       }
       tooltip.innerHTML=html; tooltip.classList.add('visible');
@@ -938,6 +1073,12 @@ function buildLinks() {
     })
     .on('mousemove.move', ev=>{ tooltip.style.left=(ev.clientX+14)+'px'; tooltip.style.top=(ev.clientY-10)+'px'; })
     .on('mouseleave', ()=>tooltip.classList.remove('visible'));
+
+  // Import count labels (hidden by default, toggled via display options)
+  countLabelEls = g.select('.links').selectAll('text.import-count-label').data(links.filter(d=>d.import_count>0)).join('text')
+    .attr('class','import-count-label')
+    .text(d=>d.import_count)
+    .attr('display', displayOptions.has('importCounts') ? null : 'none');
 }
 
 // ══ BUILD NODES ═══════════════════════════════════════════════════════════════
@@ -988,7 +1129,13 @@ function buildSimulation() {
     .force('charge',  d3.forceManyBody().strength(-500))
     .force('center',  d3.forceCenter(w()/2, h()/2))
     .force('collide', d3.forceCollide().radius(d=>nodeR(d)+20));
-  sim.on('tick',()=>{ linkEls.attr('d',edgePath); nodeEls.attr('transform',d=>`translate(${d.x},${d.y})`); });
+  sim.on('tick',()=>{
+    linkEls.attr('d',edgePath);
+    nodeEls.attr('transform',d=>`translate(${d.x},${d.y})`);
+    if (countLabelEls) countLabelEls
+      .attr('x', d=>{ const s=typeof d.source==='object'?d.source:{}; const t=typeof d.target==='object'?d.target:{}; return ((s.x||0)+(t.x||0))/2; })
+      .attr('y', d=>{ const s=typeof d.source==='object'?d.source:{}; const t=typeof d.target==='object'?d.target:{}; return ((s.y||0)+(t.y||0))/2 - 6; });
+  });
 }
 
 // ══ SELECTION ═════════════════════════════════════════════════════════════════
@@ -1007,6 +1154,9 @@ function updateVisibility() { /* filter buttons only affect edge display, not su
 function applyEdgeFilter() {
   if (!linkEls) return;
   linkEls.attr('display', e => isEdgeVisible(e) ? null : 'none');
+  if (countLabelEls) {
+    countLabelEls.attr('display', d => isEdgeVisible(d) && displayOptions.has('importCounts') ? null : 'none');
+  }
 }
 
 // ══ SIDE PANEL ════════════════════════════════════════════════════════════════
@@ -1077,6 +1227,9 @@ function applyDagreLayout() {
   d3.select('#svg').call(zoom.transform,d3.zoomIdentity.translate((vw-gi.width*sc)/2,(vh-gi.height*sc)/2).scale(sc));
   linkEls.attr('d',edgePath);
   nodeEls.attr('transform',d=>`translate(${d.x},${d.y})`);
+  if (countLabelEls) countLabelEls
+    .attr('x', d=>{ const s=typeof d.source==='object'?d.source:{}; const t=typeof d.target==='object'?d.target:{}; return ((s.x||0)+(t.x||0))/2; })
+    .attr('y', d=>{ const s=typeof d.source==='object'?d.source:{}; const t=typeof d.target==='object'?d.target:{}; return ((s.y||0)+(t.y||0))/2 - 6; });
 }
 function applyForceLayout() {
   nodes.forEach(n=>{n.fx=null;n.fy=null;});
@@ -1104,6 +1257,7 @@ function rebuildVisualization(graph) {
   buildNodes();
   buildSimulation();
   applyEdgeFilter();
+  updateDisplayOptions();
   buildAppList();
   renderPanel(null);
 

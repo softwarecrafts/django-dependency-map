@@ -39,11 +39,11 @@ dependencies = [
 # Full feature set
 full = [
     "django-extensions>=3.2",
-    "grimp>=3.3",
+    "grimp>=3.6",
 ]
 # Import analysis only (no graph_models)
 imports = [
-    "grimp>=3.3",
+    "grimp>=3.6",
 ]
 # Model graph only (no grimp)
 models = [
@@ -52,7 +52,7 @@ models = [
 # Dev / test extras
 dev = [
     "django-extensions>=3.2",
-    "grimp>=3.3",
+    "grimp>=3.6",
     "pytest>=7",
     "pytest-django>=4",
     "hatch",

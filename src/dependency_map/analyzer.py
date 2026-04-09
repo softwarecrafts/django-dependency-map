@@ -147,6 +147,7 @@ class ModelEdge:
     source_model: str
     target_model: str
     label: str = ""
+    relation_type: str = "fk"  # fk, o2o, m2m, generic
 
 
 @dataclass
@@ -156,6 +157,8 @@ class AppEdge:
     types: set[str] = field(default_factory=set)   # 'import', 'fk'
     violation: bool = False
     model_edges: list[ModelEdge] = field(default_factory=list)
+    import_count: int = 0
+    is_break_suggestion: bool = False
 
     @property
     def coupling_strength(self) -> str:
@@ -203,6 +206,8 @@ class DependencyAnalyzer:
         self.edges: dict[tuple[str, str], AppEdge] = {}
         # Apps found by grimp = user code; apps not found = FK-only (third-party)
         self._grimp_apps: set[str] = set()
+        # Cycle break suggestions from grimp.nominate_cycle_breakers()
+        self._cycle_break_suggestions: list[dict] = []
 
     def analyze(self) -> dict:
         if self.read_importlinter:
@@ -290,16 +295,17 @@ class DependencyAnalyzer:
                 if model_name not in app_node.models:
                     app_node.models.append(model_name)
 
-        # ── Extract FK/M2M edges ──────────────────────────────────────
-        # Two-line format:  nodeA -> nodeB\n  [label="..."]
+        # ── Extract model relationship edges ─────────────────────────
+        # Two-line format:  nodeA -> nodeB\n  [label="..."] [arrowhead=..., ...];
         two_line = re.compile(
-            r"(\w+)\s*->\s*(\w+)[\n\r]+\s*\[label=\"([^\"]*)\"",
+            r"(\w+)\s*->\s*(\w+)[\n\r]+\s*(\[.+)",
             re.MULTILINE,
         )
-        # One-line format:  nodeA -> nodeB [label="..."]
+        # One-line format:  nodeA -> nodeB [label="..."] [arrowhead=..., ...];
         one_line = re.compile(
-            r"(\w+)\s*->\s*(\w+)\s*\[label=\"([^\"]*)\""
+            r"(\w+)\s*->\s*(\w+)\s*(\[.+)"
         )
+        _label_re = re.compile(r'label="([^"]*)"')
 
         raw_edges: list[tuple[str, str, str]] = [
             (m.group(1), m.group(2), m.group(3))
@@ -312,13 +318,22 @@ class DependencyAnalyzer:
             if pair not in two_line_pairs:
                 raw_edges.append((m.group(1), m.group(2), m.group(3)))
 
-        for src_node, tgt_node, raw_label in raw_edges:
+        for src_node, tgt_node, attrs in raw_edges:
+            # Classify the relationship type from DOT arrow attributes
+            relation_type = _classify_dot_edge(attrs)
+
+            # Skip inheritance edges — grimp covers these via imports
+            if relation_type == "inheritance":
+                continue
+
             src_app = node_to_app.get(src_node)
             tgt_app = node_to_app.get(tgt_node)
 
             if not src_app or not tgt_app or src_app == tgt_app:
                 continue
 
+            label_m   = _label_re.search(attrs)
+            raw_label = label_m.group(1) if label_m else ""
             label     = _related_name_re.sub("", raw_label).strip()
             src_model = node_to_model.get(src_node, src_node)
             tgt_model = node_to_model.get(tgt_node, tgt_node)
@@ -326,7 +341,9 @@ class DependencyAnalyzer:
             key  = (src_app, tgt_app)
             edge = self.edges.setdefault(key, AppEdge(source=src_app, target=tgt_app))
             edge.types.add("fk")
-            edge.model_edges.append(ModelEdge(src_model, tgt_model, label))
+            edge.model_edges.append(
+                ModelEdge(src_model, tgt_model, label, relation_type)
+            )
 
     def _extract_clusters(self, dot_content: str) -> dict[str, str]:
         """Return {app_name: cluster_body_text} using brace counting."""
@@ -398,6 +415,7 @@ class DependencyAnalyzer:
             graph = grimp.build_graph(first, *rest, **grimp_kwargs)
             for root_package in self.root_packages:
                 self._process_import_graph(graph, root_package)
+            self._find_cycle_break_suggestions(graph)
         except Exception as exc:  # noqa: BLE001
             _warn(f"grimp failed for {self.root_packages!r}: {exc}")
 
@@ -438,6 +456,53 @@ class DependencyAnalyzer:
                 key  = (src_app, tgt_app)
                 edge = self.edges.setdefault(key, AppEdge(source=src_app, target=tgt_app))
                 edge.types.add("import")
+                edge.import_count += 1
+
+    # ------------------------------------------------------------------
+    # Cycle break suggestions  (grimp.nominate_cycle_breakers)
+    # ------------------------------------------------------------------
+
+    def _find_cycle_break_suggestions(self, graph):
+        """
+        Use grimp's nominate_cycle_breakers() to find the minimal set of
+        imports to remove to make each root package acyclic.
+        """
+        if not hasattr(graph, "nominate_cycle_breakers"):
+            return
+
+        if self.app_map:
+            to_app = lambda mod: module_to_app(mod, self.app_map)
+        else:
+            def to_app(mod):
+                parts = mod.split(".")
+                return parts[1] if len(parts) >= 2 else None
+
+        break_app_pairs: set[tuple[str, str]] = set()
+
+        for root_package in self.root_packages:
+            try:
+                suggestions = graph.nominate_cycle_breakers(root_package)
+            except Exception as exc:  # noqa: BLE001
+                _warn(f"nominate_cycle_breakers failed for {root_package}: {exc}")
+                continue
+
+            for importer_mod, imported_mod in suggestions:
+                src_app = to_app(importer_mod)
+                tgt_app = to_app(imported_mod)
+                if not src_app or not tgt_app or src_app == tgt_app:
+                    continue
+                self._cycle_break_suggestions.append({
+                    "source_app": src_app,
+                    "target_app": tgt_app,
+                    "importer": importer_mod,
+                    "imported": imported_mod,
+                })
+                break_app_pairs.add((src_app, tgt_app))
+
+        # Annotate edges
+        for key in break_app_pairs:
+            if key in self.edges:
+                self.edges[key].is_break_suggestion = True
 
     # ------------------------------------------------------------------
     # Seed project apps (ensure isolated apps appear in the graph)
@@ -489,8 +554,10 @@ class DependencyAnalyzer:
                 "types":       sorted(edge.types),
                 "coupling":    edge.coupling_strength,
                 "violation":   edge.violation,
+                "import_count": edge.import_count,
+                "is_break_suggestion": edge.is_break_suggestion,
                 "model_edges": [
-                    {"from": me.source_model, "to": me.target_model, "label": me.label}
+                    {"from": me.source_model, "to": me.target_model, "label": me.label, "type": me.relation_type}
                     for me in edge.model_edges
                 ],
             })
@@ -499,6 +566,7 @@ class DependencyAnalyzer:
         return {
             "apps":  apps,
             "edges": edges,
+            "cycle_break_suggestions": self._cycle_break_suggestions,
             "stats": {
                 "app_count":          len(apps),
                 "edge_count":         len(edges),
@@ -525,6 +593,28 @@ def _get_project_app_labels(project_dir: Path) -> set[str]:
     for cfg in _get_project_app_configs(project_dir):
         labels.add(cfg.label)
     return labels
+
+
+def _classify_dot_edge(attrs: str) -> str:
+    """
+    Classify a graph_models DOT edge by its arrow attributes.
+
+    Returns one of: 'inheritance', 'generic', 'm2m', 'o2o', 'fk'.
+    """
+    if "arrowhead=empty" in attrs:
+        return "inheritance"
+    if "style=" in attrs and "dotted" in attrs:
+        return "generic"
+    # M2M: both ends have non-none arrows (e.g. arrowhead=dot, arrowtail=dot)
+    has_arrowhead = re.search(r"arrowhead=(\w+)", attrs)
+    has_arrowtail = re.search(r"arrowtail=(\w+)", attrs)
+    head_val = has_arrowhead.group(1) if has_arrowhead else "none"
+    tail_val = has_arrowtail.group(1) if has_arrowtail else "none"
+    if head_val != "none" and tail_val != "none":
+        return "m2m"
+    if head_val == "none" and tail_val == "none":
+        return "o2o"
+    return "fk"
 
 
 def _warn(msg: str):
