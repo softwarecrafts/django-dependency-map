@@ -425,9 +425,3 @@ dependency_map/
 ```
 
 Drop the `dependency_map/` directory next to your `manage.py` and add `"dependency_map"` to `INSTALLED_APPS`. No migrations are required — the app has no models.
-
-
-* import-linter generation
-  * based on current/desired output?
-* cycle breaker - from grimp
-* import counts on the graph

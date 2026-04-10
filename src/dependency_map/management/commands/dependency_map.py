@@ -87,7 +87,7 @@ class Command(BaseCommand):
 
         output = options["output"] or "dependency_map.html"
         title = options["title"] or self._guess_title()
-        write_html(graph, output, title=title)
+        write_html(graph, output, title=title, root_packages=root_packages)
         self.stdout.write(self.style.SUCCESS(f"HTML written to: {output}"))
 
         if options["open_browser"]:

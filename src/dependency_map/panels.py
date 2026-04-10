@@ -307,7 +307,7 @@ class DependenciesPanel(_BasePanel):
     @staticmethod
     def _graph_page_view(request):
         from django.http import HttpResponse
-        from dependency_map.views import _render_graph_page
+        from dependency_map.views import _render_graph_page, _get_root_packages
 
         try:
             graph = _get_or_build_graph()
@@ -326,7 +326,7 @@ class DependenciesPanel(_BasePanel):
             refresh_url = ""
             version_url = ""
 
-        response = _render_graph_page(request, graph, refresh_url, version_url)
+        response = _render_graph_page(request, graph, refresh_url, version_url, root_packages=_get_root_packages())
         response["X-Frame-Options"] = "SAMEORIGIN"
         return response
 

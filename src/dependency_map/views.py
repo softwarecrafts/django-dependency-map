@@ -121,7 +121,7 @@ def _run_analysis(
 # Shared response builders
 # ---------------------------------------------------------------------------
 
-def _render_graph_page(request, graph, refresh_url, version_url):
+def _render_graph_page(request, graph, refresh_url, version_url, root_packages=None):
     """Build the full HTML response for the D3 graph page."""
     from dependency_map.renderer import render_html
 
@@ -137,6 +137,7 @@ def _render_graph_page(request, graph, refresh_url, version_url):
         refresh_url=refresh_url,
         version_url=version_url,
         highlight_apps=highlight_apps or None,
+        root_packages=root_packages,
     )
     response = HttpResponse(html, content_type="text/html; charset=utf-8")
     response["Cache-Control"] = "no-store"
@@ -177,6 +178,7 @@ class DependencyMapView(View):
             request, graph,
             refresh_url=base + "/refresh/",
             version_url=base + "/version/",
+            root_packages=root_packages,
         )
 
 

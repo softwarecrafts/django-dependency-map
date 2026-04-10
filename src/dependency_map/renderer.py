@@ -26,12 +26,14 @@ def render_html(
     refresh_url: str = "",
     version_url: str = "",
     highlight_apps: list[str] | None = None,
+    root_packages: list[str] | None = None,
 ) -> str:
     """Return a self-contained HTML string visualising *graph*."""
     import json as _json
     graph_json  = json.dumps(graph, indent=2)
     colors_json = json.dumps(COUPLING_COLORS)
     highlight_json = _json.dumps(highlight_apps or [])
+    root_packages_json = _json.dumps(root_packages or [])
 
     return (
         _HTML_TEMPLATE
@@ -41,6 +43,7 @@ def render_html(
         .replace("__REFRESH_URL__", refresh_url)
         .replace("__VERSION_URL__", version_url)
         .replace("__HIGHLIGHT_APPS__", highlight_json)
+        .replace("__ROOT_PACKAGES__", root_packages_json)
     )
 
 
@@ -50,8 +53,9 @@ def write_html(
     title: str = "Django Dependency Map",
     refresh_url: str = "",
     highlight_apps: list[str] | None = None,
+    root_packages: list[str] | None = None,
 ):
-    html = render_html(graph, title, refresh_url=refresh_url, highlight_apps=highlight_apps)
+    html = render_html(graph, title, refresh_url=refresh_url, highlight_apps=highlight_apps, root_packages=root_packages)
     Path(output_path).write_text(html, encoding="utf-8")
 
 
@@ -616,7 +620,7 @@ html, body {
       </div>
     </div>
     <button id="refresh-btn" class="refresh-btn" style="display:none" title="Re-run analysis">↻ refresh</button>
-    <button id="export-btn" class="refresh-btn" title="Export visible graph (Mermaid / DOT)">⬡ export</button>
+    <button id="export-btn" class="refresh-btn" title="Export visible graph (Mermaid / DOT / import-linter Rules)">⬡ export</button>
   </div>
 
   <!-- App list sidebar -->
@@ -649,23 +653,46 @@ html, body {
   </div>
 </div>
 
-<!-- Export modal -->
-<div id="export-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:200;align-items:center;justify-content:center;">
-  <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;width:680px;max-width:95vw;max-height:85vh;display:flex;flex-direction:column;overflow:hidden;">
-    <div style="padding:14px 18px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;">
-      <span style="font-family:var(--font-mono);font-size:13px;color:var(--accent);font-weight:500">Export visible graph</span>
-      <div style="margin-left:auto;display:flex;gap:6px;">
-        <button id="export-tab-mermaid" class="layout-btn active" style="font-size:10px;padding:2px 8px">Mermaid</button>
-        <button id="export-tab-dot"     class="layout-btn"        style="font-size:10px;padding:2px 8px">DOT</button>
-      </div>
-      <button id="export-copy" class="refresh-btn" style="margin-left:8px">copy</button>
-      <button id="export-close" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;line-height:1;padding:0 4px">×</button>
+<!-- Export panel (bottom-docked) -->
+<div id="export-modal" style="display:none;position:fixed;bottom:0;left:180px;right:300px;z-index:200;background:var(--surface);border-top:2px solid var(--border);max-height:45vh;flex-direction:column;overflow:hidden;box-shadow:0 -4px 24px rgba(0,0,0,.5);">
+  <div style="padding:10px 18px 8px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;">
+    <span style="font-family:var(--font-mono);font-size:13px;color:var(--accent);font-weight:500">Export visible graph</span>
+    <div style="margin-left:auto;display:flex;gap:6px;">
+      <button id="export-tab-mermaid" class="layout-btn active" style="font-size:10px;padding:2px 8px">Mermaid</button>
+      <button id="export-tab-dot"     class="layout-btn"        style="font-size:10px;padding:2px 8px">DOT</button>
+      <button id="export-tab-rules"   class="layout-btn"        style="font-size:10px;padding:2px 8px">Rules</button>
     </div>
-    <div style="padding:6px 12px 4px;border-bottom:1px solid var(--border);">
-      <span style="font-family:var(--font-mono);font-size:10px;color:var(--muted)" id="export-subtitle"></span>
-    </div>
-    <pre id="export-content" style="flex:1;overflow:auto;margin:0;padding:16px;font-family:var(--font-mono);font-size:11px;color:var(--text);background:var(--bg);white-space:pre;"></pre>
+    <button id="export-copy" class="refresh-btn" style="margin-left:8px">copy</button>
+    <button id="export-close" style="background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;line-height:1;padding:0 4px">&times;</button>
   </div>
+  <div style="padding:4px 12px 3px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+    <span style="font-family:var(--font-mono);font-size:10px;color:var(--muted)" id="export-subtitle"></span>
+  </div>
+  <!-- Rules options bar — visible only when Rules tab is active -->
+  <div id="rules-options" style="display:none;padding:6px 14px;border-bottom:1px solid var(--border);flex-direction:column;gap:6px;">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <span style="font-family:var(--font-mono);font-size:10px;color:var(--muted)">Contract type:</span>
+      <button id="rules-mode-forbidden" class="layout-btn active" style="font-size:10px;padding:2px 8px">Forbidden</button>
+      <button id="rules-mode-layers"    class="layout-btn"        style="font-size:10px;padding:2px 8px">Layers</button>
+      <span style="font-family:var(--font-mono);font-size:10px;color:var(--muted);margin-left:auto;">Layer grouping:</span>
+      <button id="rules-layers-strict"  class="layout-btn active" style="font-size:10px;padding:2px 8px" disabled>Strict</button>
+      <button id="rules-layers-grouped" class="layout-btn"        style="font-size:10px;padding:2px 8px" disabled>Grouped</button>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;">
+      <label style="font-family:var(--font-mono);font-size:10px;color:var(--muted);">Root package:</label>
+      <input id="rules-root-pkg" type="text" style="font-family:var(--font-mono);font-size:11px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:2px 8px;width:200px;" autocomplete="off">
+      <span style="font-family:var(--font-mono);font-size:9px;color:var(--muted)">module prefix for generated paths (check this is correct)</span>
+    </div>
+  </div>
+  <!-- Cycle-breaking panel — shown when layers mode has cycles -->
+  <div id="rules-cycles" style="display:none;padding:8px 14px;border-bottom:1px solid var(--border);max-height:140px;overflow-y:auto;background:rgba(249,115,22,.05);">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+      <span style="font-family:var(--font-mono);font-size:11px;color:#f97316;font-weight:500">Cycles detected — select edges to ignore:</span>
+      <button id="rules-accept-suggested" class="refresh-btn" style="font-size:10px;padding:2px 8px;margin-left:auto">accept suggestions</button>
+    </div>
+    <div id="rules-cycle-edges" style="font-family:var(--font-mono);font-size:10px;"></div>
+  </div>
+  <pre id="export-content" style="flex:1;overflow:auto;margin:0;padding:12px 16px;font-family:var(--font-mono);font-size:11px;color:var(--text);background:var(--bg);white-space:pre;"></pre>
 </div>
 
 <div id="tooltip"></div>
@@ -678,6 +705,7 @@ const FK_CYCLE_COLOR = '#eab308';
 const REFRESH_URL    = '__REFRESH_URL__';
 const VERSION_URL    = '__VERSION_URL__';
 const HIGHLIGHT_APPS = __HIGHLIGHT_APPS__;   // [] or ['billing','users']
+const ROOT_PACKAGES  = __ROOT_PACKAGES__;    // ['myproject'] — used by rules export
 
 // ══ MUTABLE GRAPH STATE ══════════════════════════════════════════════════════
 let FULL_GRAPH;                          // source of truth — never filtered
@@ -1472,25 +1500,263 @@ function generateDot() {
   return lines.join('\n');
 }
 
+// ── Rules export state ───────────────────────────────────────────────────
+let rulesMode     = 'forbidden'; // 'forbidden' | 'layers'
+let layersGrouping = 'strict';   // 'strict' | 'grouped'
+const rulesIgnoredEdges = new Set(); // "source|target" keys the user chose to ignore
+
+function _appToModule(appName) {
+  const root = document.getElementById('rules-root-pkg').value.trim();
+  return root ? `${root}.${appName}` : appName;
+}
+
+// ── Forbidden rules ──────────────────────────────────────────────────────
+function generateForbiddenRules() {
+  const root = document.getElementById('rules-root-pkg').value.trim();
+  const vEdges = visibleEdges().filter(e => e.types && e.types.includes('import'));
+  const lines = [
+    '[importlinter]',
+    'root_packages =',
+    `    ${root || 'myproject'}`,
+    '',
+  ];
+
+  vEdges.forEach((e, i) => {
+    const s = typeof e.source === 'object' ? e.source.id : e.source;
+    const t = typeof e.target === 'object' ? e.target.id : e.target;
+    // Edge s→t exists. Generate: "t must not import s" (reverse guard).
+    // If s→t was marked as cycle breaker, skip — the reverse edge's
+    // contract will carry the ignore_imports for this direction instead.
+    if (rulesIgnoredEdges.has(`${s}|${t}`)) return;
+    const contractName = `${t}-cannot-import-${s}`.replace(/[^a-zA-Z0-9_-]/g, '-');
+    lines.push(`[importlinter:contract:${contractName}]`);
+    lines.push(`name = ${t} must not import ${s}`);
+    lines.push('type = forbidden');
+    lines.push(`source_modules = ${_appToModule(t)}`);
+    lines.push(`forbidden_modules = ${_appToModule(s)}`);
+    // If the reverse edge (t→s) was marked as cycle breaker, add
+    // ignore_imports so the contract acknowledges the existing violation.
+    if (rulesIgnoredEdges.has(`${t}|${s}`)) {
+      lines.push('ignore_imports =');
+      lines.push(`    ${_appToModule(s)} -> ${_appToModule(t)}`);
+    }
+    lines.push('');
+  });
+
+  return lines.join('\n');
+}
+
+// ── Layers rules ─────────────────────────────────────────────────────────
+
+// Kahn's algorithm topological sort, returns layers (array of arrays).
+// Returns null if graph has cycles (after removing ignoredEdges).
+function topoSortLayers(appNames, importEdges, ignoredEdges) {
+  const adj = {};
+  const inDeg = {};
+  appNames.forEach(a => { adj[a] = []; inDeg[a] = 0; });
+
+  importEdges.forEach(e => {
+    const s = typeof e.source === 'object' ? e.source.id : e.source;
+    const t = typeof e.target === 'object' ? e.target.id : e.target;
+    const key = `${s}|${t}`;
+    if (ignoredEdges.has(key)) return;
+    if (!adj[s] || !adj[t]) return; // skip edges to/from hidden apps
+    adj[s].push(t);
+    inDeg[t] = (inDeg[t] || 0) + 1;
+  });
+
+  // Kahn's: peel off zero-indegree nodes layer by layer
+  const layers = [];
+  let remaining = new Set(appNames);
+
+  while (remaining.size > 0) {
+    const layer = [...remaining].filter(n => (inDeg[n] || 0) === 0);
+    if (layer.length === 0) return null; // cycle remains
+    layers.push(layer.sort());
+    layer.forEach(n => {
+      remaining.delete(n);
+      (adj[n] || []).forEach(m => { inDeg[m]--; });
+    });
+  }
+
+  // layers[0] = top (most dependent), layers[last] = bottom (depended-on leaf)
+  return layers;
+}
+
+// Find edges that participate in cycles (for the cycle-breaking UI).
+// Uses the FULL edge set (ignoring nothing) so that already-checked
+// edges stay visible as checkboxes rather than vanishing.
+function findCycleEdges(appNames, importEdges) {
+  const visible = importEdges.filter(e => {
+    const s = typeof e.source === 'object' ? e.source.id : e.source;
+    const t = typeof e.target === 'object' ? e.target.id : e.target;
+    return appNames.includes(s) && appNames.includes(t);
+  });
+  const sccs = tarjanSCCs(visible, 'import');
+  const sccMembers = new Set();
+  sccs.forEach(scc => scc.forEach(n => sccMembers.add(n)));
+
+  return visible.filter(e => {
+    const s = typeof e.source === 'object' ? e.source.id : e.source;
+    const t = typeof e.target === 'object' ? e.target.id : e.target;
+    return sccMembers.has(s) && sccMembers.has(t) && e.types && e.types.includes('import');
+  }).map(e => {
+    const s = typeof e.source === 'object' ? e.source.id : e.source;
+    const t = typeof e.target === 'object' ? e.target.id : e.target;
+    return { source: s, target: t, is_break_suggestion: !!e.is_break_suggestion };
+  });
+}
+
+function renderCycleBreakingUI() {
+  const appNames = visibleApps();
+  const vEdges = edges || [];
+  const cycleEdges = findCycleEdges(appNames, vEdges);
+  const panel = document.getElementById('rules-cycles');
+  const container = document.getElementById('rules-cycle-edges');
+
+  if (cycleEdges.length === 0) {
+    panel.style.display = 'none';
+    return;
+  }
+
+  panel.style.display = 'block';
+  // Clear previous content safely
+  while (container.firstChild) container.removeChild(container.firstChild);
+
+  cycleEdges.forEach(ce => {
+    const key = `${ce.source}|${ce.target}`;
+    const row = document.createElement('label');
+    row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer;color:var(--text);';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.checked = rulesIgnoredEdges.has(key);
+    cb.dataset.edgeKey = key;
+    cb.addEventListener('change', () => {
+      cb.checked ? rulesIgnoredEdges.add(key) : rulesIgnoredEdges.delete(key);
+      renderRulesContent();
+    });
+    const label = document.createElement('span');
+    label.textContent = `${ce.source} \u2192 ${ce.target}`;
+    if (ce.is_break_suggestion) {
+      label.textContent += ' (suggested)';
+      label.style.color = '#f97316';
+    }
+    row.appendChild(cb);
+    row.appendChild(label);
+    container.appendChild(row);
+  });
+}
+
+function generateLayersRules() {
+  const root = document.getElementById('rules-root-pkg').value.trim();
+  const appNames = visibleApps();
+  const vEdges = edges || [];
+  const importEdges = vEdges.filter(e => e.types && e.types.includes('import'));
+
+  const layers = topoSortLayers(appNames, importEdges, rulesIgnoredEdges);
+  if (!layers) {
+    return '# ERROR: Cycles remain in the visible graph.\n# Use the checkboxes above to ignore cycle-causing edges.';
+  }
+
+  const lines = [
+    '[importlinter]',
+    'root_packages =',
+    `    ${root || 'myproject'}`,
+    '',
+    '[importlinter:contract:architecture-layers]',
+    'name = Architecture layers',
+    'type = layers',
+    'layers =',
+  ];
+
+  if (layersGrouping === 'grouped') {
+    // Peers at same topo depth share a line with |
+    layers.forEach(layer => {
+      lines.push('    ' + layer.map(a => _appToModule(a)).join(' | '));
+    });
+  } else {
+    // Strict: each app on its own line, layers separated by ordering
+    layers.forEach(layer => {
+      layer.forEach(a => {
+        lines.push('    ' + _appToModule(a));
+      });
+    });
+  }
+
+  // Add ignore_imports if any edges were marked
+  if (rulesIgnoredEdges.size > 0) {
+    lines.push('ignore_imports =');
+    [...rulesIgnoredEdges].sort().forEach(key => {
+      const [s, t] = key.split('|');
+      lines.push(`    ${_appToModule(s)} -> ${_appToModule(t)}`);
+    });
+  }
+
+  lines.push('');
+  return lines.join('\n');
+}
+
+// ── Render dispatcher ────────────────────────────────────────────────────
+
+function renderRulesContent() {
+  const appNames = visibleApps();
+  const vEdges = visibleEdges().filter(e => e.types && e.types.includes('import'));
+
+  renderCycleBreakingUI();
+
+  if (rulesMode === 'layers') {
+    const content = generateLayersRules();
+    document.getElementById('export-content').textContent = content;
+    document.getElementById('export-subtitle').textContent =
+      `${appNames.length} apps \u00b7 ${vEdges.length} import edges \u00b7 paste into .importlinter or setup.cfg`;
+  } else {
+    const content = generateForbiddenRules();
+    document.getElementById('export-content').textContent = content;
+    document.getElementById('export-subtitle').textContent =
+      `${appNames.length} apps \u00b7 ${vEdges.length} import edges \u2192 ${vEdges.length} forbidden contracts \u00b7 paste into .importlinter or setup.cfg`;
+  }
+}
+
 function renderExportContent() {
+  const isRules = exportTab === 'rules';
+  document.getElementById('rules-options').style.display = isRules ? 'flex' : 'none';
+  if (!isRules) document.getElementById('rules-cycles').style.display = 'none';
+
+  // Enable/disable layer grouping buttons based on rules mode
+  const isLayers = rulesMode === 'layers';
+  document.getElementById('rules-layers-strict').disabled  = !isLayers;
+  document.getElementById('rules-layers-grouped').disabled = !isLayers;
+
+  if (isRules) {
+    renderRulesContent();
+    return;
+  }
+
   const content = exportTab === 'mermaid' ? generateMermaid() : generateDot();
   document.getElementById('export-content').textContent = content;
   const vApps  = visibleApps().length;
   const vEdges = visibleEdges().length;
   document.getElementById('export-subtitle').textContent =
-    `${vApps} apps · ${vEdges} edges · ${exportTab === 'mermaid' ? 'paste into any Markdown file or Mermaid Live' : 'render with: dot -Tsvg deps.dot > deps.svg'}`;
+    `${vApps} apps \u00b7 ${vEdges} edges \u00b7 ${exportTab === 'mermaid' ? 'paste into any Markdown file or Mermaid Live' : 'render with: dot -Tsvg deps.dot > deps.svg'}`;
 }
 
+// ── Export modal event handlers ──────────────────────────────────────────
+
 document.getElementById('export-btn').addEventListener('click', () => {
+  const panel = document.getElementById('export-modal');
+  if (panel.style.display === 'flex') {
+    panel.style.display = 'none';
+    return;
+  }
+  // Pre-fill root package from server-injected value
+  const input = document.getElementById('rules-root-pkg');
+  if (!input.value && ROOT_PACKAGES.length) input.value = ROOT_PACKAGES[0];
+  rulesIgnoredEdges.clear();
   renderExportContent();
-  document.getElementById('export-modal').style.display = 'flex';
+  panel.style.display = 'flex';
 });
 document.getElementById('export-close').addEventListener('click', () => {
   document.getElementById('export-modal').style.display = 'none';
-});
-document.getElementById('export-modal').addEventListener('click', e => {
-  if (e.target === document.getElementById('export-modal'))
-    document.getElementById('export-modal').style.display = 'none';
 });
 document.getElementById('export-copy').addEventListener('click', () => {
   const text = document.getElementById('export-content').textContent;
@@ -1501,13 +1767,59 @@ document.getElementById('export-copy').addEventListener('click', () => {
   });
 });
 
-['mermaid', 'dot'].forEach(tab => {
+// Tab switching: Mermaid / DOT / Rules
+['mermaid', 'dot', 'rules'].forEach(tab => {
   document.getElementById(`export-tab-${tab}`).addEventListener('click', () => {
     exportTab = tab;
     document.getElementById('export-tab-mermaid').classList.toggle('active', tab === 'mermaid');
     document.getElementById('export-tab-dot').classList.toggle('active', tab === 'dot');
+    document.getElementById('export-tab-rules').classList.toggle('active', tab === 'rules');
     renderExportContent();
   });
+});
+
+// Rules sub-mode switching: Forbidden / Layers
+['forbidden', 'layers'].forEach(mode => {
+  document.getElementById(`rules-mode-${mode}`).addEventListener('click', () => {
+    rulesMode = mode;
+    document.getElementById('rules-mode-forbidden').classList.toggle('active', mode === 'forbidden');
+    document.getElementById('rules-mode-layers').classList.toggle('active', mode === 'layers');
+    document.getElementById('rules-layers-strict').disabled  = mode !== 'layers';
+    document.getElementById('rules-layers-grouped').disabled = mode !== 'layers';
+    renderExportContent();
+  });
+});
+
+// Layer grouping switching: Strict / Grouped
+['strict', 'grouped'].forEach(g => {
+  document.getElementById(`rules-layers-${g}`).addEventListener('click', () => {
+    if (rulesMode !== 'layers') return;
+    layersGrouping = g;
+    document.getElementById('rules-layers-strict').classList.toggle('active', g === 'strict');
+    document.getElementById('rules-layers-grouped').classList.toggle('active', g === 'grouped');
+    renderExportContent();
+  });
+});
+
+// Accept all suggested cycle breakers
+document.getElementById('rules-accept-suggested').addEventListener('click', () => {
+  const checkboxes = document.querySelectorAll('#rules-cycle-edges input[type=checkbox]');
+  const hasSuggestions = [...checkboxes].some(cb => {
+    return cb.parentElement.textContent.includes('(suggested)');
+  });
+  checkboxes.forEach(cb => {
+    const isSuggested = cb.parentElement.textContent.includes('(suggested)');
+    if (isSuggested || !hasSuggestions) {
+      cb.checked = true;
+      rulesIgnoredEdges.add(cb.dataset.edgeKey);
+    }
+  });
+  renderRulesContent();
+});
+
+// Re-render rules when root package changes
+document.getElementById('rules-root-pkg').addEventListener('input', () => {
+  if (exportTab === 'rules') renderRulesContent();
 });
 
 // ══ RESIZE ════════════════════════════════════════════════════════════════════
