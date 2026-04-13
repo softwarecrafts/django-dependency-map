@@ -505,19 +505,36 @@ digraph model_graph {
         assert "BaseModel" not in a.app_nodes["cashback"].models
         assert "BaseModel" not in a.app_nodes["cards"].models
 
-    def test_abstract_model_attributed_to_true_app(self):
+    def test_foreign_abstract_model_excluded_from_node_map(self):
         """
-        BaseModel's node ID prefix is apps_core — it should be mapped to
-        the 'core' app, not whichever cluster was parsed last.
+        Foreign abstract model nodes should be excluded from node_to_app
+        entirely so that inherited FK edges (e.g. BaseModel.created_by)
+        don't create phantom app-level dependencies.
         """
         a = self._make_analyzer()
         a._parse_dot(self.DOT)
-        # Verify via edges: inheritance edges are skipped, so no core edges
-        # exist, but the node mapping is correct (checked indirectly —
-        # if BaseModel were misattributed, a false cross-app FK edge would appear)
         edge_apps = {(e.source, e.target) for e in a.edges.values()}
-        # Only real FK: cashback → cards
+        # Only the real FK: cashback → cards.  No edges involving 'core'.
         assert edge_apps == {("cashback", "cards")}
+
+    def test_foreign_abstract_fk_edges_dropped(self):
+        """
+        An FK on a foreign abstract model (e.g. BaseModel.created_by → User)
+        should not create any app-level edge, since the node is excluded
+        from the mapping.
+        """
+        dot_with_fk = self.DOT.replace(
+            "}\n",
+            "  apps_core_models_BaseModel -> apps_users_models_User\n"
+            '  [label=" created_by"] [arrowhead=none, arrowtail=dot, dir=both];\n'
+            "}\n",
+            1,  # replace only the final closing brace
+        )
+        a = self._make_analyzer()
+        a._parse_dot(dot_with_fk)
+        edge_apps = {(e.source, e.target) for e in a.edges.values()}
+        # BaseModel → User FK should be dropped, not appear as core → users
+        assert "core" not in {app for pair in edge_apps for app in pair}
 
 
 # ---------------------------------------------------------------------------

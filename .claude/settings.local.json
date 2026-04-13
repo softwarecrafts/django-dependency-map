@@ -4,7 +4,9 @@
       "WebFetch(domain:claude.ai)",
       "Bash(pip list:*)",
       "Bash(pip install:*)",
-      "Bash(hatch build:*)"
+      "Bash(hatch build:*)",
+      "Bash(python -m pytest tests/test_dependency_map.py::TestAbstractModelDeduplication -v)",
+      "Bash(python -m pytest tests/ -v)"
     ]
   }
 }

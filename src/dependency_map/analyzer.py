@@ -294,15 +294,15 @@ class DependencyAnalyzer:
                 # graph_models --group-models duplicates abstract base model
                 # nodes into every cluster that inherits from them.  Detect
                 # foreign nodes: if the node ID prefix (before _models_)
-                # doesn't match the raw cluster name, resolve the true owner
-                # from the node ID and skip adding it to this cluster's app.
+                # doesn't match the raw cluster name, skip it entirely.
+                # Leaving it out of node_to_app means any edge referencing
+                # it (inherited FKs like created_by) will be silently
+                # dropped — which is correct, because those FKs belong to
+                # the abstract model's app, not the inheriting app.
+                # Inheritance edges are already skipped by _classify_dot_edge.
                 if "_models_" in node_id:
                     node_prefix = node_id.rsplit("_models_", 1)[0]
                     if node_prefix != raw_app_name:
-                        if node_id not in node_to_app:
-                            true_app = self._normalize_app_name(node_prefix)
-                            node_to_app[node_id] = true_app
-                            node_to_model[node_id] = model_name
                         continue
 
                 node_to_app[node_id]   = app_name
