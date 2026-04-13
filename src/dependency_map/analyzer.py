@@ -290,6 +290,21 @@ class DependencyAnalyzer:
                 node_id = m.group(1)
                 label_m = _model_name_re.search(cluster_body, m.start())
                 model_name = label_m.group(1) if label_m else node_id
+
+                # graph_models --group-models duplicates abstract base model
+                # nodes into every cluster that inherits from them.  Detect
+                # foreign nodes: if the node ID prefix (before _models_)
+                # doesn't match the raw cluster name, resolve the true owner
+                # from the node ID and skip adding it to this cluster's app.
+                if "_models_" in node_id:
+                    node_prefix = node_id.rsplit("_models_", 1)[0]
+                    if node_prefix != raw_app_name:
+                        if node_id not in node_to_app:
+                            true_app = self._normalize_app_name(node_prefix)
+                            node_to_app[node_id] = true_app
+                            node_to_model[node_id] = model_name
+                        continue
+
                 node_to_app[node_id]   = app_name
                 node_to_model[node_id] = model_name
                 if model_name not in app_node.models:

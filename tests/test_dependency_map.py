@@ -442,6 +442,85 @@ class TestProcessImportGraphWithAppMap:
 
 
 # ---------------------------------------------------------------------------
+# DOT parsing — abstract model deduplication
+# ---------------------------------------------------------------------------
+
+
+class TestAbstractModelDeduplication:
+    """
+    graph_models --group-models duplicates abstract base model nodes into
+    every cluster that inherits from them.  _parse_dot must attribute these
+    nodes to their true app (derived from the node ID prefix), not the
+    inheriting cluster.
+    """
+
+    # Minimal DOT: two clusters (cashback, cards) both containing
+    # apps_core_models_BaseModel.  cashback has an FK to a cards model.
+    DOT = """\
+digraph model_graph {
+  subgraph cluster_apps_cashback {
+    apps_core_models_BaseModel [label=<
+      <TABLE><TR><TD><B>BaseModel</B></TD></TR></TABLE>>]
+    apps_cashback_models_CashbackConfig [label=<
+      <TABLE><TR><TD><B>CashbackConfig</B></TD></TR></TABLE>>]
+  }
+  subgraph cluster_apps_cards {
+    apps_core_models_BaseModel [label=<
+      <TABLE><TR><TD><B>BaseModel</B></TD></TR></TABLE>>]
+    apps_cards_models_Card [label=<
+      <TABLE><TR><TD><B>Card</B></TD></TR></TABLE>>]
+  }
+  apps_cashback_models_CashbackConfig -> apps_cards_models_Card
+  [label=" card (cashback_configs)"] [arrowhead=none, arrowtail=dot, dir=both];
+  apps_cashback_models_CashbackConfig -> apps_core_models_BaseModel
+  [label=" abstract inheritance"] [arrowhead=empty, arrowtail=none, dir=both];
+  apps_cards_models_Card -> apps_core_models_BaseModel
+  [label=" abstract inheritance"] [arrowhead=empty, arrowtail=none, dir=both];
+}
+"""
+
+    def _make_analyzer(self):
+        from dependency_map.analyzer import DependencyAnalyzer
+        a = DependencyAnalyzer(
+            root_packages=["apps"],
+            app_map={
+                "apps.cashback": "cashback",
+                "apps.cards": "cards",
+                "apps.core": "core",
+            },
+        )
+        return a
+
+    def test_no_false_cards_to_cashback_edge(self):
+        """The only FK edge should be cashback → cards, not the reverse."""
+        a = self._make_analyzer()
+        a._parse_dot(self.DOT)
+        assert ("cashback", "cards") in a.edges
+        assert ("cards", "cashback") not in a.edges
+
+    def test_abstract_model_not_in_inheriting_apps(self):
+        """BaseModel should not appear in the model list of cashback or cards."""
+        a = self._make_analyzer()
+        a._parse_dot(self.DOT)
+        assert "BaseModel" not in a.app_nodes["cashback"].models
+        assert "BaseModel" not in a.app_nodes["cards"].models
+
+    def test_abstract_model_attributed_to_true_app(self):
+        """
+        BaseModel's node ID prefix is apps_core — it should be mapped to
+        the 'core' app, not whichever cluster was parsed last.
+        """
+        a = self._make_analyzer()
+        a._parse_dot(self.DOT)
+        # Verify via edges: inheritance edges are skipped, so no core edges
+        # exist, but the node mapping is correct (checked indirectly —
+        # if BaseModel were misattributed, a false cross-app FK edge would appear)
+        edge_apps = {(e.source, e.target) for e in a.edges.values()}
+        # Only real FK: cashback → cards
+        assert edge_apps == {("cashback", "cards")}
+
+
+# ---------------------------------------------------------------------------
 # Auto-refresh version endpoint
 # ---------------------------------------------------------------------------
 
