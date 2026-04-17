@@ -292,6 +292,165 @@ class TestDiscoverRootPackages:
         assert result == ["myproject"]
 
 
+class TestDiscoverPlainPackages:
+    """Test discovery of plain Python packages not registered as Django apps."""
+
+    def _make_package(self, tmp_path, name, children=None):
+        """Create a Python package directory with optional child packages."""
+        pkg = tmp_path / name
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("")
+        for child in (children or []):
+            child_dir = pkg / child
+            child_dir.mkdir()
+            (child_dir / "__init__.py").write_text("")
+        return pkg
+
+    def test_discovers_child_packages(self, tmp_path):
+        from unittest.mock import patch, MagicMock
+        from django.apps import apps as django_apps
+        from dependency_map.analyzer import _discover_plain_packages
+
+        self._make_package(tmp_path, "myutils", children=["parsing", "helpers"])
+
+        mod = MagicMock()
+        mod.__file__ = str(tmp_path / "myutils" / "__init__.py")
+
+        with (
+            patch("importlib.import_module", return_value=mod),
+            patch.object(django_apps, "get_app_configs", return_value=[]),
+        ):
+            result = _discover_plain_packages(["myutils"])
+
+        assert sorted(result) == ["myutils.helpers", "myutils.parsing"]
+
+    def test_skips_django_app_children(self, tmp_path):
+        from unittest.mock import patch, MagicMock
+        from django.apps import apps as django_apps
+        from dependency_map.analyzer import _discover_plain_packages
+
+        self._make_package(tmp_path, "myproject", children=["billing", "utils"])
+
+        mod = MagicMock()
+        mod.__file__ = str(tmp_path / "myproject" / "__init__.py")
+
+        billing_cfg = MagicMock()
+        billing_cfg.name = "myproject.billing"
+
+        with (
+            patch("importlib.import_module", return_value=mod),
+            patch.object(django_apps, "get_app_configs", return_value=[billing_cfg]),
+        ):
+            result = _discover_plain_packages(["myproject"])
+
+        assert result == ["myproject.utils"]
+
+    def test_flat_package_becomes_single_node(self, tmp_path):
+        from unittest.mock import patch, MagicMock
+        from django.apps import apps as django_apps
+        from dependency_map.analyzer import _discover_plain_packages
+
+        # Package with only .py files, no child directories
+        self._make_package(tmp_path, "flatpkg")
+        (tmp_path / "flatpkg" / "helpers.py").write_text("")
+
+        mod = MagicMock()
+        mod.__file__ = str(tmp_path / "flatpkg" / "__init__.py")
+
+        with (
+            patch("importlib.import_module", return_value=mod),
+            patch.object(django_apps, "get_app_configs", return_value=[]),
+        ):
+            result = _discover_plain_packages(["flatpkg"])
+
+        assert result == ["flatpkg"]
+
+    def test_skips_dirs_without_init(self, tmp_path):
+        from unittest.mock import patch, MagicMock
+        from django.apps import apps as django_apps
+        from dependency_map.analyzer import _discover_plain_packages
+
+        self._make_package(tmp_path, "myutils", children=["real_pkg"])
+        # Also create a directory WITHOUT __init__.py
+        (tmp_path / "myutils" / "not_a_pkg").mkdir()
+
+        mod = MagicMock()
+        mod.__file__ = str(tmp_path / "myutils" / "__init__.py")
+
+        with (
+            patch("importlib.import_module", return_value=mod),
+            patch.object(django_apps, "get_app_configs", return_value=[]),
+        ):
+            result = _discover_plain_packages(["myutils"])
+
+        assert result == ["myutils.real_pkg"]
+
+    def test_skips_django_app_internals(self, tmp_path):
+        """migrations/, management/, templatetags/, locale/ are never nodes."""
+        from unittest.mock import patch, MagicMock
+        from django.apps import apps as django_apps
+        from dependency_map.analyzer import _discover_plain_packages
+
+        self._make_package(
+            tmp_path, "myutils",
+            children=["parsing", "migrations", "management", "templatetags", "locale"],
+        )
+
+        mod = MagicMock()
+        mod.__file__ = str(tmp_path / "myutils" / "__init__.py")
+
+        with (
+            patch("importlib.import_module", return_value=mod),
+            patch.object(django_apps, "get_app_configs", return_value=[]),
+        ):
+            result = _discover_plain_packages(["myutils"])
+
+        assert result == ["myutils.parsing"]
+
+    def test_skips_subpackages_of_django_apps(self, tmp_path):
+        """When a root package is a Django app, its internal subpackages are excluded."""
+        from unittest.mock import patch, MagicMock
+        from django.apps import apps as django_apps
+        from dependency_map.analyzer import _discover_plain_packages
+
+        self._make_package(tmp_path, "billing", children=["api", "services"])
+
+        mod = MagicMock()
+        mod.__file__ = str(tmp_path / "billing" / "__init__.py")
+
+        billing_cfg = MagicMock()
+        billing_cfg.name = "billing"
+
+        with (
+            patch("importlib.import_module", return_value=mod),
+            patch.object(django_apps, "get_app_configs", return_value=[billing_cfg]),
+        ):
+            result = _discover_plain_packages(["billing"])
+
+        # billing.api and billing.services are internal to the billing Django app
+        assert result == []
+
+    def test_included_in_app_map(self, tmp_path):
+        """Plain packages appear in build_module_to_app_map with fully-qualified labels."""
+        from unittest.mock import patch, MagicMock
+        from django.apps import apps as django_apps
+        from dependency_map.analyzer import build_module_to_app_map
+
+        self._make_package(tmp_path, "myutils", children=["parsing"])
+
+        mod = MagicMock()
+        mod.__file__ = str(tmp_path / "myutils" / "__init__.py")
+
+        with (
+            patch("importlib.import_module", return_value=mod),
+            patch.object(django_apps, "get_app_configs", return_value=[]),
+        ):
+            result = build_module_to_app_map(["myutils"])
+
+        assert "myutils.parsing" in result
+        assert result["myutils.parsing"] == "myutils.parsing"
+
+
 class TestBuildModuleToAppMap:
 
     def test_maps_apps_with_prefix_stripping(self):

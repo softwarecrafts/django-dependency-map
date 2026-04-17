@@ -96,13 +96,78 @@ def _get_project_app_configs(base_dir: Path) -> list:
     return project_apps
 
 
+def _discover_plain_packages(root_packages: list[str]) -> list[str]:
+    """
+    For each root package, find child directories that are Python packages
+    (contain ``__init__.py``) but are NOT already registered as Django apps.
+
+    If a root package has no child packages, treat the root itself as a node.
+
+    Returns a list of fully-qualified dotted names
+    (e.g. ``["myutils.parsing", "myutils.helpers"]``).
+    """
+    import importlib
+
+    from django.apps import apps as django_apps
+
+    registered_names = {cfg.name for cfg in django_apps.get_app_configs()}
+    # Conventional Django app subdirectories that should never be nodes.
+    _DJANGO_APP_INTERNALS = {"migrations", "management", "templatetags", "locale"}
+    plain: list[str] = []
+
+    for rp in root_packages:
+        # Locate the root package on the filesystem
+        try:
+            mod = importlib.import_module(rp)
+        except ImportError:
+            continue
+        mod_file = getattr(mod, "__file__", None)
+        if not mod_file:
+            continue
+        pkg_dir = Path(mod_file).resolve().parent
+
+        # If the root package itself is a registered Django app, skip its
+        # internal subdirectories (migrations/, management/, etc.) and only
+        # discover genuinely independent child packages.
+        rp_is_app = rp in registered_names
+
+        found_child = False
+        for child in sorted(pkg_dir.iterdir()):
+            if not child.is_dir():
+                continue
+            if not (child / "__init__.py").exists():
+                continue
+            if child.name in _DJANGO_APP_INTERNALS:
+                continue
+            dotted = f"{rp}.{child.name}"
+            # Skip if already claimed by a Django AppConfig (exact match or
+            # the child is a parent namespace of a registered app).
+            if any(dotted == name or name.startswith(dotted + ".") for name in registered_names):
+                continue
+            # Skip if a registered app is a parent of this child (i.e. this
+            # child is an internal subpackage of a Django app).
+            if any(dotted.startswith(name + ".") for name in registered_names):
+                continue
+            plain.append(dotted)
+            found_child = True
+
+        # Flat package with no child packages → treat root itself as a node
+        if not found_child and not rp_is_app and rp not in registered_names:
+            plain.append(rp)
+
+    return plain
+
+
 def build_module_to_app_map(
     root_packages: list[str] | None = None,
     project_dir: Path | None = None,
 ) -> dict[str, str]:
     """
-    Build a canonical {AppConfig.name: normalised_label} mapping, sorted
-    longest-first for greedy prefix matching.
+    Build a canonical {dotted_name: label} mapping, sorted longest-first
+    for greedy prefix matching.
+
+    Includes both Django ``AppConfig`` entries and plain Python packages
+    discovered under ``root_packages`` that are not registered as apps.
 
     This is the single source of truth for module name → app label used
     by both the analyzer and the DjDT panel.
@@ -120,6 +185,11 @@ def build_module_to_app_map(
                 label = label[len(prefix):]
                 break
         prefix_map[cfg.name] = label
+
+    # Add plain Python packages not covered by any AppConfig.
+    for dotted in _discover_plain_packages(rps):
+        if dotted not in prefix_map:
+            prefix_map[dotted] = dotted
 
     return dict(sorted(prefix_map.items(), key=lambda kv: len(kv[0]), reverse=True))
 
@@ -524,7 +594,7 @@ class DependencyAnalyzer:
     # ------------------------------------------------------------------
 
     def _seed_project_apps(self):
-        for label in _get_project_app_labels(self.manage_py_dir):
+        for label in _get_project_app_labels(self.manage_py_dir, self.root_packages):
             self.app_nodes.setdefault(label, AppNode(name=label))
 
     # ------------------------------------------------------------------
@@ -548,7 +618,7 @@ class DependencyAnalyzer:
             out_degree[src] = out_degree.get(src, 0) + 1
             in_degree[tgt]  = in_degree.get(tgt,  0) + 1
 
-        project_labels = _get_project_app_labels(self.manage_py_dir)
+        project_labels = _get_project_app_labels(self.manage_py_dir, self.root_packages)
 
         apps = {}
         for name, node in sorted(self.app_nodes.items()):
@@ -598,15 +668,23 @@ class DependencyAnalyzer:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _get_project_app_labels(project_dir: Path) -> set[str]:
+def _get_project_app_labels(
+    project_dir: Path,
+    root_packages: list[str] | None = None,
+) -> set[str]:
     """
     Return the set of app labels whose source lives inside the project
     directory.  Apps in site-packages (Django contrib, third-party) are
-    excluded.  This is the authoritative check for is_third_party.
+    excluded.  Plain Python packages discovered under *root_packages*
+    are included so they are not marked as third-party.
+
+    This is the authoritative check for is_third_party.
     """
     labels: set[str] = set()
     for cfg in _get_project_app_configs(project_dir):
         labels.add(cfg.label)
+    if root_packages:
+        labels.update(_discover_plain_packages(root_packages))
     return labels
 
 
