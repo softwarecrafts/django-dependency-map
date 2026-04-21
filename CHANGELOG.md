@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.1]
 
 ### Fixed
 - Plain Python packages now appear in the live debug view (`/__depmap__/`) as well as the management command output. Switched `_discover_plain_packages` from `importlib.import_module` to `importlib.util.find_spec` so discovery no longer executes the package's `__init__.py`; this avoids import-time exceptions (e.g. `AppRegistryNotReady`, circular imports) that silently suppressed discovery in a web-request context.
