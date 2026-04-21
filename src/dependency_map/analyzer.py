@@ -96,6 +96,20 @@ def _get_project_app_configs(base_dir: Path) -> list:
     return project_apps
 
 
+# Tracks which (root_package, outcome) pairs have already been logged so that
+# repeat calls (e.g. across a request cycle) don't spam the console.
+_PLAIN_PKG_LOG_SEEN: set[tuple[str, str]] = set()
+
+
+def _log_plain_pkg_once(rp: str, message: str, *, level: str = "info") -> None:
+    """Emit a plain-package discovery diagnostic, deduplicated per process."""
+    key = (rp, message)
+    if key in _PLAIN_PKG_LOG_SEEN:
+        return
+    _PLAIN_PKG_LOG_SEEN.add(key)
+    _warn(f"plain-package discovery [{level}]: {message}")
+
+
 def _discover_plain_packages(root_packages: list[str]) -> list[str]:
     """
     For each root package, find child directories that are Python packages
@@ -106,7 +120,7 @@ def _discover_plain_packages(root_packages: list[str]) -> list[str]:
     Returns a list of fully-qualified dotted names
     (e.g. ``["myutils.parsing", "myutils.helpers"]``).
     """
-    import importlib
+    import importlib.util
 
     from django.apps import apps as django_apps
 
@@ -116,44 +130,79 @@ def _discover_plain_packages(root_packages: list[str]) -> list[str]:
     plain: list[str] = []
 
     for rp in root_packages:
-        # Locate the root package on the filesystem
+        # Skip root packages that ARE registered Django apps — their entire
+        # subtree is owned by Django and handled elsewhere.
+        if rp in registered_names:
+            continue
+
+        # Locate the root package. Catch every exception so a broken plain
+        # package (import-time errors, AppRegistryNotReady, etc.) can't
+        # silently wipe out the entire analysis.
         try:
-            mod = importlib.import_module(rp)
-        except ImportError:
+            spec = importlib.util.find_spec(rp)
+        except Exception as exc:  # noqa: BLE001
+            _log_plain_pkg_once(
+                rp, f"find_spec({rp!r}) raised {type(exc).__name__}: {exc} — skipped",
+                level="error",
+            )
             continue
-        mod_file = getattr(mod, "__file__", None)
-        if not mod_file:
+
+        if spec is None:
+            _log_plain_pkg_once(
+                rp, f"{rp!r} not importable (find_spec returned None) — skipped",
+                level="error",
+            )
             continue
-        pkg_dir = Path(mod_file).resolve().parent
 
-        # If the root package itself is a registered Django app, skip its
-        # internal subdirectories (migrations/, management/, etc.) and only
-        # discover genuinely independent child packages.
-        rp_is_app = rp in registered_names
+        # Prefer submodule_search_locations: it works for both regular and
+        # namespace packages. Fall back to origin's parent for regular packages.
+        locations: list[Path] = []
+        if spec.submodule_search_locations:
+            locations = [Path(p).resolve() for p in spec.submodule_search_locations]
+        elif spec.origin:
+            locations = [Path(spec.origin).resolve().parent]
+        else:
+            _log_plain_pkg_once(
+                rp, f"{rp!r} has no origin or search locations — skipped",
+                level="error",
+            )
+            continue
 
-        found_child = False
-        for child in sorted(pkg_dir.iterdir()):
-            if not child.is_dir():
+        found_children: list[str] = []
+        seen: set[str] = set()
+        for pkg_dir in locations:
+            if not pkg_dir.is_dir():
                 continue
-            if not (child / "__init__.py").exists():
-                continue
-            if child.name in _DJANGO_APP_INTERNALS:
-                continue
-            dotted = f"{rp}.{child.name}"
-            # Skip if already claimed by a Django AppConfig (exact match or
-            # the child is a parent namespace of a registered app).
-            if any(dotted == name or name.startswith(dotted + ".") for name in registered_names):
-                continue
-            # Skip if a registered app is a parent of this child (i.e. this
-            # child is an internal subpackage of a Django app).
-            if any(dotted.startswith(name + ".") for name in registered_names):
-                continue
-            plain.append(dotted)
-            found_child = True
+            for child in sorted(pkg_dir.iterdir()):
+                if not child.is_dir():
+                    continue
+                if not (child / "__init__.py").exists():
+                    continue
+                if child.name in _DJANGO_APP_INTERNALS:
+                    continue
+                dotted = f"{rp}.{child.name}"
+                if dotted in seen:
+                    continue
+                # Skip if already claimed by a Django AppConfig (exact match or
+                # the child is a parent namespace of a registered app).
+                if any(dotted == name or name.startswith(dotted + ".") for name in registered_names):
+                    continue
+                # Skip if a registered app is a parent of this child (i.e. this
+                # child is an internal subpackage of a Django app).
+                if any(dotted.startswith(name + ".") for name in registered_names):
+                    continue
+                seen.add(dotted)
+                found_children.append(dotted)
 
-        # Flat package with no child packages → treat root itself as a node
-        if not found_child and not rp_is_app and rp not in registered_names:
+        if found_children:
+            plain.extend(found_children)
+            _log_plain_pkg_once(
+                rp, f"{rp!r} → {len(found_children)} child package(s): {found_children}",
+            )
+        else:
+            # Flat or empty package → treat root itself as a single node.
             plain.append(rp)
+            _log_plain_pkg_once(rp, f"{rp!r} → single node (no child packages)")
 
     return plain
 

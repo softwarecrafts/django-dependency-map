@@ -306,18 +306,24 @@ class TestDiscoverPlainPackages:
             (child_dir / "__init__.py").write_text("")
         return pkg
 
+    def _fake_spec(self, pkg_dir):
+        """Create a fake ModuleSpec for a regular package at pkg_dir."""
+        from unittest.mock import MagicMock
+        spec = MagicMock()
+        spec.origin = str(pkg_dir / "__init__.py")
+        spec.submodule_search_locations = [str(pkg_dir)]
+        return spec
+
     def test_discovers_child_packages(self, tmp_path):
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import patch
         from django.apps import apps as django_apps
         from dependency_map.analyzer import _discover_plain_packages
 
         self._make_package(tmp_path, "myutils", children=["parsing", "helpers"])
-
-        mod = MagicMock()
-        mod.__file__ = str(tmp_path / "myutils" / "__init__.py")
+        spec = self._fake_spec(tmp_path / "myutils")
 
         with (
-            patch("importlib.import_module", return_value=mod),
+            patch("importlib.util.find_spec", return_value=spec),
             patch.object(django_apps, "get_app_configs", return_value=[]),
         ):
             result = _discover_plain_packages(["myutils"])
@@ -330,15 +336,13 @@ class TestDiscoverPlainPackages:
         from dependency_map.analyzer import _discover_plain_packages
 
         self._make_package(tmp_path, "myproject", children=["billing", "utils"])
-
-        mod = MagicMock()
-        mod.__file__ = str(tmp_path / "myproject" / "__init__.py")
+        spec = self._fake_spec(tmp_path / "myproject")
 
         billing_cfg = MagicMock()
         billing_cfg.name = "myproject.billing"
 
         with (
-            patch("importlib.import_module", return_value=mod),
+            patch("importlib.util.find_spec", return_value=spec),
             patch.object(django_apps, "get_app_configs", return_value=[billing_cfg]),
         ):
             result = _discover_plain_packages(["myproject"])
@@ -346,19 +350,17 @@ class TestDiscoverPlainPackages:
         assert result == ["myproject.utils"]
 
     def test_flat_package_becomes_single_node(self, tmp_path):
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import patch
         from django.apps import apps as django_apps
         from dependency_map.analyzer import _discover_plain_packages
 
         # Package with only .py files, no child directories
         self._make_package(tmp_path, "flatpkg")
         (tmp_path / "flatpkg" / "helpers.py").write_text("")
-
-        mod = MagicMock()
-        mod.__file__ = str(tmp_path / "flatpkg" / "__init__.py")
+        spec = self._fake_spec(tmp_path / "flatpkg")
 
         with (
-            patch("importlib.import_module", return_value=mod),
+            patch("importlib.util.find_spec", return_value=spec),
             patch.object(django_apps, "get_app_configs", return_value=[]),
         ):
             result = _discover_plain_packages(["flatpkg"])
@@ -366,19 +368,17 @@ class TestDiscoverPlainPackages:
         assert result == ["flatpkg"]
 
     def test_skips_dirs_without_init(self, tmp_path):
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import patch
         from django.apps import apps as django_apps
         from dependency_map.analyzer import _discover_plain_packages
 
         self._make_package(tmp_path, "myutils", children=["real_pkg"])
         # Also create a directory WITHOUT __init__.py
         (tmp_path / "myutils" / "not_a_pkg").mkdir()
-
-        mod = MagicMock()
-        mod.__file__ = str(tmp_path / "myutils" / "__init__.py")
+        spec = self._fake_spec(tmp_path / "myutils")
 
         with (
-            patch("importlib.import_module", return_value=mod),
+            patch("importlib.util.find_spec", return_value=spec),
             patch.object(django_apps, "get_app_configs", return_value=[]),
         ):
             result = _discover_plain_packages(["myutils"])
@@ -387,7 +387,7 @@ class TestDiscoverPlainPackages:
 
     def test_skips_django_app_internals(self, tmp_path):
         """migrations/, management/, templatetags/, locale/ are never nodes."""
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import patch
         from django.apps import apps as django_apps
         from dependency_map.analyzer import _discover_plain_packages
 
@@ -395,12 +395,10 @@ class TestDiscoverPlainPackages:
             tmp_path, "myutils",
             children=["parsing", "migrations", "management", "templatetags", "locale"],
         )
-
-        mod = MagicMock()
-        mod.__file__ = str(tmp_path / "myutils" / "__init__.py")
+        spec = self._fake_spec(tmp_path / "myutils")
 
         with (
-            patch("importlib.import_module", return_value=mod),
+            patch("importlib.util.find_spec", return_value=spec),
             patch.object(django_apps, "get_app_configs", return_value=[]),
         ):
             result = _discover_plain_packages(["myutils"])
@@ -415,34 +413,74 @@ class TestDiscoverPlainPackages:
 
         self._make_package(tmp_path, "billing", children=["api", "services"])
 
-        mod = MagicMock()
-        mod.__file__ = str(tmp_path / "billing" / "__init__.py")
-
         billing_cfg = MagicMock()
         billing_cfg.name = "billing"
 
         with (
-            patch("importlib.import_module", return_value=mod),
             patch.object(django_apps, "get_app_configs", return_value=[billing_cfg]),
         ):
             result = _discover_plain_packages(["billing"])
 
-        # billing.api and billing.services are internal to the billing Django app
+        # billing is a Django app, so discovery is skipped entirely
+        assert result == []
+
+    def test_namespace_package_discovered(self, tmp_path):
+        """Namespace packages (no __init__.py) should still work via submodule_search_locations."""
+        from unittest.mock import patch, MagicMock
+        from django.apps import apps as django_apps
+        from dependency_map.analyzer import _discover_plain_packages
+
+        # Namespace package: directory exists with child packages but no __init__.py
+        ns_dir = tmp_path / "myns"
+        ns_dir.mkdir()
+        child = ns_dir / "real"
+        child.mkdir()
+        (child / "__init__.py").write_text("")
+
+        # Namespace package: origin is None, but submodule_search_locations is set
+        spec = MagicMock()
+        spec.origin = None
+        spec.submodule_search_locations = [str(ns_dir)]
+
+        with (
+            patch("importlib.util.find_spec", return_value=spec),
+            patch.object(django_apps, "get_app_configs", return_value=[]),
+        ):
+            result = _discover_plain_packages(["myns"])
+
+        assert result == ["myns.real"]
+
+    def test_import_failure_warns_and_skips(self, tmp_path):
+        """If find_spec raises, the package is skipped without breaking discovery."""
+        from unittest.mock import patch
+        from django.apps import apps as django_apps
+        from dependency_map.analyzer import _discover_plain_packages
+
+        def find_spec_broken(name):
+            if name == "broken":
+                raise RuntimeError("simulated import failure")
+            return None
+
+        with (
+            patch("importlib.util.find_spec", side_effect=find_spec_broken),
+            patch.object(django_apps, "get_app_configs", return_value=[]),
+        ):
+            # Should not raise, just skip the broken package
+            result = _discover_plain_packages(["broken"])
+
         assert result == []
 
     def test_included_in_app_map(self, tmp_path):
         """Plain packages appear in build_module_to_app_map with fully-qualified labels."""
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import patch
         from django.apps import apps as django_apps
         from dependency_map.analyzer import build_module_to_app_map
 
         self._make_package(tmp_path, "myutils", children=["parsing"])
-
-        mod = MagicMock()
-        mod.__file__ = str(tmp_path / "myutils" / "__init__.py")
+        spec = self._fake_spec(tmp_path / "myutils")
 
         with (
-            patch("importlib.import_module", return_value=mod),
+            patch("importlib.util.find_spec", return_value=spec),
             patch.object(django_apps, "get_app_configs", return_value=[]),
         ):
             result = build_module_to_app_map(["myutils"])
