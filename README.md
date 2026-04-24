@@ -1,5 +1,10 @@
 # django-dependency-map
 
+[![PyPI version](https://img.shields.io/pypi/v/django-dependency-map.svg)](https://pypi.org/project/django-dependency-map/)
+[![Python versions](https://img.shields.io/pypi/pyversions/django-dependency-map.svg)](https://pypi.org/project/django-dependency-map/)
+
+Available on PyPI: [pypi.org/project/django-dependency-map](https://pypi.org/project/django-dependency-map/)
+
 ## Demo Video 🎥
 
 [![Watch the demo](https://img.youtube.com/vi/5nMno4PWuBw/maxresdefault.jpg)](https://youtu.be/5nMno4PWuBw?si=srm1059Qm4BuMQ90)
@@ -28,14 +33,19 @@ Produces a self-contained HTML file, a live Django view, and an optional Django 
 - [CI integration](#ci-integration)
 - [Coupling metrics](#coupling-metrics)
 - [All settings](#all-settings)
-- [File layout](#file-layout)
 
 ---
 
 ## Installation
 
 ```bash
-pip install django-extensions grimp
+# Full feature set (recommended) — includes django-extensions and grimp
+pip install django-dependency-map[full]
+
+# Or pick a subset:
+pip install django-dependency-map[imports]   # grimp only (import analysis)
+pip install django-dependency-map[models]    # django-extensions only (FK analysis)
+pip install django-dependency-map            # core (no analysis backends)
 ```
 
 For the Debug Toolbar panel (optional):
@@ -401,27 +411,3 @@ DEPENDENCY_MAP_STAFF_ONLY = True
 DEPENDENCY_MAP_PANEL_CACHE_TTL = 60
 ```
 
----
-
-## File layout
-
-```
-dependency_map/
-├── __init__.py
-├── apps.py                         # AppConfig — registers templates
-├── analyzer.py                     # Merges graph_models + grimp → graph dict
-├── cycles.py                       # Tarjan SCC + BFS shortest cycle
-├── importlinter.py                 # .importlinter / setup.cfg contract parser
-├── panels.py                       # Django Debug Toolbar panel (optional)
-├── renderer.py                     # Graph dict → self-contained HTML/D3/dagre
-├── urls.py                         # URL patterns for the live view
-├── views.py                        # DependencyMapView + DependencyMapRefreshView
-├── templates/
-│   └── dependency_map/
-│       └── panel.html              # Debug Toolbar iframe wrapper
-└── management/
-    └── commands/
-        └── dependency_map.py       # Management command entry point
-```
-
-Drop the `dependency_map/` directory next to your `manage.py` and add `"dependency_map"` to `INSTALLED_APPS`. No migrations are required — the app has no models.
